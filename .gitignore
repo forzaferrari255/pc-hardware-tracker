@@ -8,3 +8,8 @@ data/*.db-*
 *.egg-info/
 dist/
 build/
+
+# 本机采集端私密配置与 profile
+local_collector/config.json
+local_collector/pw-profile/
+local_collector/*.log

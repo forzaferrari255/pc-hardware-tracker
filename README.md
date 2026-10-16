@@ -62,6 +62,7 @@ API 文档：http://127.0.0.1:8000/docs
 | GET | `/api/chart/{product_id}/forecast` | 统计预测（含 OHLC candles） |
 | GET | `/api/analyze/{product_id}` | AI 分析（离线返回明确错误） |
 | POST | `/api/collect/watchlist` | 对关注项采价一次 |
+| POST | `/api/ingest/prices` | 本机采集端推送报价（需 `INGEST_TOKEN`） |
 | GET | `/api/products/search?q=5080&platform=mock` | 搜索（mock） |
 
 ## 环境变量
@@ -86,12 +87,31 @@ API 文档：http://127.0.0.1:8000/docs
 | `manual_csv` | 可用 | 用户导入合法 CSV（如商家后台导出） |
 | `http_json` | 可用 | 指向**你自己授权**的 JSON API |
 | `jd` / `taobao` / `pdd` | **stub** | 仅说明推荐合规路径，不实现反爬 |
+| `local_browser` | 入库平台码 | 本机 Playwright 推送目标（adapter 记为 http_json） |
+
+### 本机已登录采集（推荐日常自动取价）
+
+不必每天手填。在你自己电脑上跑 `local_collector/`：用已登录的 Chrome/Edge（或 Playwright 持久化 profile）打开关注商品页 → 解析售价 → `POST /api/ingest/prices`。
+
+- 指南：[docs/LOCAL_COLLECTOR.md](./docs/LOCAL_COLLECTOR.md)
+- 采集端说明：[local_collector/README.md](./local_collector/README.md)
+
+```bash
+# 服务端 .env
+INGEST_TOKEN=your-secret
+
+# 本机（示例）
+cd local_collector
+cp config.example.json config.json   # 填 token / url / user_data_dir
+pip install -r requirements-local.txt && playwright install chromium
+python collect_once.py -c config.json
+```
 
 **推荐真对接路径（需自行申请/实现）：**
 
-1. 平台**开放平台 / 联盟**官方 API（有配额与协议）
-2. **商家后台**导出价格后走 `manual_csv`
-3. **用户本机**浏览器扩展：在用户已登录会话下、仅自用采集，写入本机 `http_json` 服务
+1. **本机已登录采集** → `/api/ingest/prices`（见上）
+2. 平台**开放平台 / 联盟**官方 API（有配额与协议）
+3. **商家后台**导出价格后走 `manual_csv`
 4. 第三方**合规数据商** API → `http_json`
 
 **禁止**：绕过验证码/风控、盗用 Cookie、大规模未授权抓取。
