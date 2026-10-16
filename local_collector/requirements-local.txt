@@ -1,0 +1,5 @@
+# 仅本机采集端依赖（与主服务 requirements.txt 分离）
+playwright>=1.40.0
+httpx>=0.27.0
+# 可选：定时；也可用系统 cron / 任务计划程序
+# schedule>=1.2.0

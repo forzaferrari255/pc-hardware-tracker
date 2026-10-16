@@ -1,0 +1,48 @@
+{
+  "service_url": "http://127.0.0.1:8000",
+  "token": "change-me-to-match-INGEST_TOKEN",
+  "browser": "chromium",
+  "user_data_dir": "",
+  "channel": "chrome",
+  "headless": false,
+  "timeout_ms": 45000,
+  "pause_between_ms": 2000,
+  "stop_on_challenge": true,
+  "challenge_keywords": [
+    "验证码",
+    "安全验证",
+    "滑动验证",
+    "请完成验证",
+    "unusual traffic",
+    "captcha",
+    "访问受限"
+  ],
+  "products": [
+    {
+      "external_id": "jd-item-100012345678",
+      "url": "https://item.jd.com/100012345678.html",
+      "name": "示例显卡（请改成真实关注商品）",
+      "category": "gpu",
+      "brand": "NVIDIA",
+      "model": "RTX 5080",
+      "platform": "local_browser",
+      "price_selectors": [
+        ".price .p-price .price",
+        ".summary-price .p-price",
+        "[class*='price'] .price",
+        "meta[itemprop='price']"
+      ]
+    }
+  ],
+  "schedule": {
+    "enabled": false,
+    "cron_hint": "建议用系统 cron：每小时 0 * * * * cd ... && python collect_once.py",
+    "interval_minutes": 60
+  },
+  "_windows_user_data_dir_examples": {
+    "chrome": "%LOCALAPPDATA%\\\\Google\\\\Chrome\\\\User Data",
+    "edge": "%LOCALAPPDATA%\\\\Microsoft\\\\Edge\\\\User Data",
+    "playwright_persistent": ".\\\\pw-profile",
+    "note": "Fill user_data_dir with an absolute path; expand %LOCALAPPDATA% yourself. Quit Chrome/Edge fully before using system profile."
+  }
+}
