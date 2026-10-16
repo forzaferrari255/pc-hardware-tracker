@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>商品走势 · K 线</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1><a href="/" style="color:inherit;text-decoration:none">← 大盘</a> · <span id="title">加载中…</span></h1>
+    <span id="netBadge" class="badge">…</span>
+  </header>
+  <main>
+    <div class="panel">
+      <div class="toolbar row">
+        <label>区间
+          <select id="days">
+            <option value="30">30 天</option>
+            <option value="90" selected>90 天</option>
+            <option value="180">180 天</option>
+            <option value="365">1 年</option>
+          </select>
+        </label>
+        <label>均线
+          <select id="ma">
+            <option value="both" selected>MA7 + MA30</option>
+            <option value="7">仅 MA7</option>
+            <option value="30">仅 MA30</option>
+            <option value="none">关闭</option>
+          </select>
+        </label>
+        <label>预测
+          <select id="method">
+            <option value="ema" selected>指数平滑</option>
+            <option value="sma">移动平均</option>
+            <option value="linear">线性趋势</option>
+          </select>
+        </label>
+        <button class="btn" id="btnRefresh">刷新</button>
+        <button class="btn ghost" id="btnAnalyze">AI 入手分析</button>
+      </div>
+
+      <div id="ohlcBar" class="ohlc-bar">
+        <span class="ohlc-label">选中 K 线</span>
+        <span>开 <b id="vO">—</b></span>
+        <span>高 <b id="vH" class="up">—</b></span>
+        <span>低 <b id="vL" class="down">—</b></span>
+        <span>收 <b id="vC">—</b></span>
+        <span class="muted" id="vDate">点击或悬停图上某一根 K 线</span>
+        <span class="badge" id="vKind" style="display:none"></span>
+      </div>
+
+      <div id="chart"></div>
+      <p class="muted" id="fcSummary"></p>
+      <p class="muted" id="outlierNote"></p>
+    </div>
+    <div class="panel">
+      <h2>AI 分析</h2>
+      <div id="analysis" class="muted">点击「AI 入手分析」。离线时仅返回统计预测，不调用大模型。</div>
+    </div>
+  </main>
+  <script>
+    const productId = {{ product_id }};
+    const chart = echarts.init(document.getElementById('chart'));
+    window.addEventListener('resize', () => chart.resize());
+
+    let catDates = [];
+    let histLen = 0;
+    let allCandles = []; // {t,o,h,l,c,kind}
+
+    function fmt(n) {
+      if (n == null || Number.isNaN(n)) return '—';
+      return '¥' + Number(n).toFixed(2);
+    }
+
+    function showCandle(c) {
+      if (!c) return;
+      document.getElementById('vO').textContent = fmt(c.o);
+      document.getElementById('vH').textContent = fmt(c.h);
+      document.getElementById('vL').textContent = fmt(c.l);
+      document.getElementById('vC').textContent = fmt(c.c);
+      document.getElementById('vDate').textContent = c.t;
+      const kind = document.getElementById('vKind');
+      if (c.kind === 'forecast') {
+        kind.style.display = '';
+        kind.textContent = '预测';
+        kind.className = 'badge forecast-tag';
+      } else {
+        kind.style.display = 'none';
+      }
+      const up = c.c >= c.o;
+      document.getElementById('vC').className = up ? 'up' : 'down';
+    }
+
+    async function health() {
+      const h = await (await fetch('/api/health')).json();
+      const b = document.getElementById('netBadge');
+      b.textContent = h.online ? '在线' : '离线 · AI 不可用';
+      b.className = 'badge ' + (h.online ? 'online' : 'offline');
+    }
+
+    function buildMaAligned(maArr, totalLen, offset) {
+      // maArr 对应历史段；预测段补 null
+      const out = new Array(totalLen).fill(null);
+      for (let i = 0; i < maArr.length; i++) out[i] = maArr[i];
+      return out;
+    }
+
+    async function load() {
+      const days = document.getElementById('days').value;
+      const method = document.getElementById('method').value;
+      const maMode = document.getElementById('ma').value;
+      const [series, fc] = await Promise.all([
+        fetch(`/api/chart/${productId}?days=${days}&method=${method}&horizon_days=14`).then(r => r.json()),
+        fetch(`/api/chart/${productId}/forecast?method=${method}&horizon_days=14`).then(r => r.json()),
+      ]);
+      document.getElementById('title').textContent = series.name;
+      document.getElementById('fcSummary').textContent = fc.summary;
+      document.getElementById('outlierNote').textContent =
+        series.outliers_excluded ? `已排除 ${series.outliers_excluded} 个不合理价格点（不入主图）` : '无可疑离群价';
+
+      const hist = series.candles || [];
+      const fut = (series.forecast_candles && series.forecast_candles.length)
+        ? series.forecast_candles
+        : (fc.candles || []);
+
+      histLen = hist.length;
+      allCandles = [
+        ...hist.map(c => ({ ...c, kind: 'hist' })),
+        ...fut.map(c => ({ ...c, kind: 'forecast' })),
+      ];
+      catDates = allCandles.map(c => c.t);
+
+      // ECharts candlestick 数据为 [open, close, low, high]
+      const histValues = hist.map(c => [c.o, c.c, c.l, c.h]);
+      const futValues = fut.map(c => [c.o, c.c, c.l, c.h]);
+      // 预测段前面垫 null，使接在历史之后
+      const futPadded = new Array(histLen).fill('-').concat(futValues);
+      const histPadded = histValues.concat(new Array(fut.length).fill('-'));
+
+      const seriesList = [
+        {
+          name: '历史K线',
+          type: 'candlestick',
+          data: histPadded,
+          itemStyle: {
+            color: '#e74c3c',
+            color0: '#2ecc71',
+            borderColor: '#e74c3c',
+            borderColor0: '#2ecc71',
+          },
+        },
+        {
+          name: '预测K线',
+          type: 'candlestick',
+          data: futPadded,
+          itemStyle: {
+            color: 'rgba(240,173,78,0.45)',
+            color0: 'rgba(240,173,78,0.35)',
+            borderColor: '#f0ad4e',
+            borderColor0: '#f0ad4e',
+            borderType: 'dashed',
+          },
+        },
+      ];
+
+      const totalLen = catDates.length;
+      if (maMode === 'both' || maMode === '7') {
+        seriesList.push({
+          name: 'MA7',
+          type: 'line',
+          data: buildMaAligned(series.ma7 || [], totalLen),
+          showSymbol: false,
+          lineStyle: { width: 1.2, color: '#e6c07b' },
+        });
+      }
+      if (maMode === 'both' || maMode === '30') {
+        seriesList.push({
+          name: 'MA30',
+          type: 'line',
+          data: buildMaAligned(series.ma30 || [], totalLen),
+          showSymbol: false,
+          lineStyle: { width: 1.2, color: '#c678dd' },
+        });
+      }
+
+      if (allCandles.length) showCandle(allCandles[histLen ? histLen - 1 : 0]);
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        animation: false,
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'cross' },
+          backgroundColor: 'rgba(18,24,33,0.95)',
+          borderColor: '#1e2a3a',
+          textStyle: { color: '#e6edf7' },
+          formatter(params) {
+            if (!params || !params.length) return '';
+            const idx = params[0].dataIndex;
+            const c = allCandles[idx];
+            if (!c || c.o == null) return catDates[idx] || '';
+            const tag = c.kind === 'forecast' ? '【预测】' : '';
+            const chg = c.o ? ((c.c - c.o) / c.o * 100) : 0;
+            return [
+              `<div style="font-weight:600;margin-bottom:4px">${tag}${c.t}</div>`,
+              `开盘：${fmt(c.o)}`,
+              `最高：<span style="color:#e74c3c">${fmt(c.h)}</span>`,
+              `最低：<span style="color:#2ecc71">${fmt(c.l)}</span>`,
+              `收盘：${fmt(c.c)}（${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%）`,
+            ].join('<br/>');
+          },
+        },
+        legend: { textStyle: { color: '#8b9bb4' }, top: 0 },
+        axisPointer: { link: [{ xAxisIndex: 'all' }] },
+        grid: { left: 64, right: 28, top: 44, bottom: 64 },
+        dataZoom: [
+          { type: 'inside', xAxisIndex: 0 },
+          {
+            type: 'slider', height: 18, bottom: 8,
+            borderColor: '#1e2a3a', fillerColor: 'rgba(61,156,240,0.2)',
+            textStyle: { color: '#8b9bb4' },
+          },
+        ],
+        xAxis: {
+          type: 'category',
+          data: catDates,
+          boundaryGap: true,
+          axisLabel: { color: '#8b9bb4' },
+          axisLine: { lineStyle: { color: '#1e2a3a' } },
+          splitLine: { show: false },
+        },
+        yAxis: {
+          type: 'value',
+          scale: true,
+          axisLabel: { color: '#8b9bb4', formatter: v => '¥' + v },
+          splitLine: { lineStyle: { color: '#1e2a3a' } },
+        },
+        series: seriesList,
+      }, true);
+    }
+
+    chart.on('click', (params) => {
+      if (params == null || params.dataIndex == null) return;
+      const c = allCandles[params.dataIndex];
+      if (c) showCandle(c);
+    });
+    chart.on('updateAxisPointer', (event) => {
+      const info = event.axesInfo && event.axesInfo[0];
+      if (!info || info.value == null) return;
+      const idx = typeof info.value === 'number' ? info.value : catDates.indexOf(info.value);
+      if (idx >= 0 && allCandles[idx]) showCandle(allCandles[idx]);
+    });
+
+    document.getElementById('btnRefresh').onclick = load;
+    document.getElementById('days').onchange = load;
+    document.getElementById('ma').onchange = load;
+    document.getElementById('method').onchange = load;
+    document.getElementById('btnAnalyze').onclick = async () => {
+      const el = document.getElementById('analysis');
+      el.className = 'muted';
+      el.textContent = '分析中…';
+      const method = document.getElementById('method').value;
+      const r = await fetch(`/api/analyze/${productId}?method=${method}`);
+      const data = await r.json();
+      if (data.error) {
+        el.className = 'err';
+        el.textContent = data.error + (data.forecast ? '\n\n（统计预测仍可用）' + data.forecast.summary : '');
+      } else {
+        el.className = 'analysis';
+        el.textContent = data.analysis || '无结果';
+      }
+    };
+    health();
+    load();
+  </script>
+</body>
+</html>
