@@ -31,7 +31,13 @@ class Settings(BaseSettings):
 
     force_offline: bool = False
 
+    # 本机采集端推送鉴权（POST /api/ingest/prices）
+    ingest_token: str = ""
+    # 入库时是否自动加入关注列表
+    ingest_auto_watch: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

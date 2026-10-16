@@ -142,3 +142,46 @@ class CollectResult(BaseModel):
     price: float | None
     accepted: bool
     reason: str | None = None
+
+
+class IngestPriceItem(BaseModel):
+    """本机采集端推送的单条报价。"""
+
+    external_id: str = Field(..., min_length=1, max_length=128)
+    price: float = Field(..., gt=0)
+    name: str | None = None
+    category: str | None = "other"
+    brand: str | None = None
+    model: str | None = None
+    url: str | None = None
+    platform: str | None = "local_browser"
+    collected_at: datetime | None = None
+    open: float | None = Field(None, alias="o")
+    high: float | None = Field(None, alias="h")
+    low: float | None = Field(None, alias="l")
+    close: float | None = Field(None, alias="c")
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    close_price: float | None = None
+    source: str | None = "local_collector"
+    auto_watch: bool | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class IngestItemResult(BaseModel):
+    external_id: str
+    product_id: int | None = None
+    price: float | None = None
+    accepted: bool
+    is_outlier: bool = False
+    reason: str | None = None
+    watch_added: bool = False
+
+
+class IngestResponse(BaseModel):
+    ok: bool
+    count: int
+    results: list[IngestItemResult]
+

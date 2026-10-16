@@ -21,6 +21,7 @@ def ensure_default_platforms(db: Session) -> None:
         ("mock", "Mock 演示", "mock"),
         ("manual_csv", "手动 CSV", "manual_csv"),
         ("http_json", "HTTP JSON", "http_json"),
+        ("local_browser", "本机浏览器采集", "http_json"),
         ("jd", "京东", "jd"),
         ("taobao", "淘宝/天猫", "taobao"),
         ("pdd", "拼多多", "pdd"),
@@ -499,3 +500,173 @@ def build_analysis_payload(
             "请勿编造未出现在本 JSON 中的事实。",
         ],
     }
+
+
+def ensure_platform(
+    db: Session,
+    code: str,
+    *,
+    name: str | None = None,
+    adapter: str = "http_json",
+) -> Platform:
+    """按 code 查找平台；不存在则创建（用于 ingest 默认 local_browser）。"""
+    plat = db.scalar(select(Platform).where(Platform.code == code))
+    if plat:
+        return plat
+    plat = Platform(
+        code=code,
+        name=name or code,
+        adapter=adapter,
+        enabled=True,
+    )
+    db.add(plat)
+    db.commit()
+    db.refresh(plat)
+    return plat
+
+
+def ingest_prices(
+    db: Session,
+    items: list[dict],
+    *,
+    default_auto_watch: bool | None = None,
+) -> list[dict]:
+    """
+    接收本机采集端推送的报价：找/建 Platform+Product，写 PricePoint（走 outlier 过滤），
+    可选自动加入 watchlist。
+    items 每项为 dict，字段见 IngestPriceItem。
+    返回列表：external_id, product_id, price, accepted, is_outlier, reason, watch_added
+    """
+    settings = get_settings()
+    if default_auto_watch is None:
+        default_auto_watch = settings.ingest_auto_watch
+
+    results: list[dict] = []
+    for raw in items:
+        external_id = str(raw.get("external_id") or "").strip()
+        price = raw.get("price")
+        if not external_id or price is None:
+            results.append(
+                {
+                    "external_id": external_id or "",
+                    "product_id": None,
+                    "price": None,
+                    "accepted": False,
+                    "is_outlier": False,
+                    "reason": "缺少 external_id 或 price",
+                    "watch_added": False,
+                }
+            )
+            continue
+
+        platform_code = (raw.get("platform") or "local_browser").strip() or "local_browser"
+        ensure_platform(
+            db,
+            platform_code,
+            name="本机浏览器采集" if platform_code == "local_browser" else platform_code,
+            adapter="http_json",
+        )
+
+        name = (raw.get("name") or "").strip() or f"item-{external_id}"
+        category = (raw.get("category") or "other").strip() or "other"
+        brand = raw.get("brand")
+        model = raw.get("model")
+        url = raw.get("url")
+
+        prod = get_or_create_product(
+            db,
+            platform_code=platform_code,
+            external_id=external_id,
+            name=name,
+            category=category,
+            brand=brand,
+            model=model,
+            url=url,
+        )
+        # 更新可变元数据（名称/链接等）
+        changed = False
+        if raw.get("name") and prod.name != name:
+            prod.name = name
+            changed = True
+        if url and prod.url != url:
+            prod.url = url
+            changed = True
+        if brand and prod.brand != brand:
+            prod.brand = brand
+            changed = True
+        if model and prod.model != model:
+            prod.model = model
+            changed = True
+        if category and prod.category != category:
+            prod.category = category
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(prod)
+
+        open_price = raw.get("open_price")
+        if open_price is None:
+            open_price = raw.get("open") or raw.get("o")
+        high_price = raw.get("high_price")
+        if high_price is None:
+            high_price = raw.get("high") or raw.get("h")
+        low_price = raw.get("low_price")
+        if low_price is None:
+            low_price = raw.get("low") or raw.get("l")
+        close_price = raw.get("close_price")
+        if close_price is None:
+            close_price = raw.get("close") or raw.get("c")
+
+        collected_at = raw.get("collected_at")
+        if isinstance(collected_at, str):
+            try:
+                collected_at = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+                if collected_at.tzinfo:
+                    collected_at = collected_at.replace(tzinfo=None)
+            except ValueError:
+                collected_at = None
+
+        source = (raw.get("source") or "local_collector").strip() or "local_collector"
+        pp = add_price_point(
+            db,
+            prod.id,
+            float(price),
+            source=source,
+            collected_at=collected_at,
+            raw=raw,
+            open_price=float(open_price) if open_price is not None else None,
+            high_price=float(high_price) if high_price is not None else None,
+            low_price=float(low_price) if low_price is not None else None,
+            close_price=float(close_price) if close_price is not None else None,
+        )
+
+        watch_added = False
+        auto_watch = raw.get("auto_watch")
+        if auto_watch is None:
+            auto_watch = default_auto_watch
+        if auto_watch:
+            existing = db.scalar(
+                select(WatchItem).where(WatchItem.product_id == prod.id)
+            )
+            if not existing:
+                db.add(WatchItem(product_id=prod.id, active=True, alias=name[:128]))
+                db.commit()
+                watch_added = True
+            elif not existing.active:
+                existing.active = True
+                db.commit()
+                watch_added = True
+
+        results.append(
+            {
+                "external_id": external_id,
+                "product_id": prod.id,
+                "price": pp.price,
+                "accepted": not pp.is_outlier,
+                "is_outlier": pp.is_outlier,
+                "reason": pp.filter_reason,
+                "watch_added": watch_added,
+            }
+        )
+    return results
+
