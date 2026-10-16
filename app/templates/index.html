@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>电脑硬件价格大盘</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>电脑硬件价格大盘</h1>
+    <div class="row">
+      <span id="netBadge" class="badge">检测网络…</span>
+      <button class="btn ghost" id="btnCollect">刷新采价</button>
+    </div>
+  </header>
+  <main>
+    <div class="panel">
+      <h2>关注列表</h2>
+      <p class="muted">本地历史价与图表离线可用；AI 分析需联网与 DeepSeek API Key。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>别名 / 商品</th>
+            <th>分类</th>
+            <th>最新价</th>
+            <th>目标价</th>
+            <th>更新时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="watchBody"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    async function loadHealth() {
+      const r = await fetch('/api/health');
+      const h = await r.json();
+      const b = document.getElementById('netBadge');
+      if (h.online) {
+        b.textContent = h.deepseek_configured ? '在线 · DeepSeek 已配置' : '在线 · 未配置 API Key';
+        b.className = 'badge online';
+      } else {
+        b.textContent = '离线 · AI 分析不可用';
+        b.className = 'badge offline';
+      }
+    }
+    async function loadWatch() {
+      const r = await fetch('/api/watchlist');
+      const items = await r.json();
+      const tb = document.getElementById('watchBody');
+      tb.innerHTML = items.map(w => {
+        const name = w.alias || w.product.name;
+        const price = w.latest_price != null ? `¥${w.latest_price.toFixed(2)}` : '—';
+        const at = w.latest_at ? new Date(w.latest_at + 'Z').toLocaleString('zh-CN') : '—';
+        const tgt = w.target_price != null ? `¥${w.target_price}` : '—';
+        return `<tr>
+          <td><a href="/product/${w.product_id}">${name}</a><div class="muted">${w.product.model || ''}</div></td>
+          <td>${w.product.category}</td>
+          <td class="price">${price}</td>
+          <td>${tgt}</td>
+          <td class="muted">${at}</td>
+          <td><a href="/product/${w.product_id}">走势</a></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="6" class="muted">暂无关注，请运行 scripts/seed_demo.py</td></tr>';
+    }
+    document.getElementById('btnCollect').onclick = async () => {
+      const btn = document.getElementById('btnCollect');
+      btn.disabled = true;
+      try {
+        await fetch('/api/collect/watchlist', { method: 'POST' });
+        await loadWatch();
+      } finally { btn.disabled = false; }
+    };
+    loadHealth();
+    loadWatch();
+  </script>
+</body>
+</html>
